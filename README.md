@@ -72,9 +72,12 @@ For a **Desktop app** OAuth client, Google itself documents that the "client sec
 2. Right-click → **Share** → add each friend's Google email as **Editor**.
 3. Open the folder and copy the ID from the URL:
    `https://drive.google.com/drive/folders/`**`1aBcD3FgHiJkLmNoP...`** ← that last part is the **folder ID**.
-4. Set the folder ID as the group default. Two options:
-   - **Rebuild-free:** put it in each app's `settings.json` under `"DriveFolderId"` (see [Settings](#settingsjson-reference) below) — you can ship a ready-made `settings.json` alongside the exe.
-   - **Baked-in default:** change `DefaultDriveFolderId` in `AppSettings.cs` before building, so a fresh install with no `settings.json` already points at your folder.
+4. Give the folder ID to your friends. It is **never** baked into the app or a public release
+   (the folder is private to your group). Each user provides it one of two ways:
+   - **They paste it** into the app's **Server folder ID** field on first run, or
+   - **You pre-seed it** into the private install zip's `settings.json` so they don't have to —
+     pass it to the release script with `-DriveFolderId <id>` (see Part 3). Either way it's
+     stored only in that user's local `settings.json`, never in the repo.
 
 > Heads up: because the app uses the restricted `drive.file` scope, the cleanest setup is that the *first* upload of each world happens through the app itself (the app then "owns" those files and everyone's app can see them via the shared folder). Don't manually drag save files into the folder through the Drive website.
 
@@ -105,41 +108,46 @@ public const string Repo = "your-github-name/ValheimSync";
    ```
 2. **Build + package** with the release script (reads the version from the csproj):
    ```powershell
-   pwsh scripts/release.ps1            # dry run: builds VSaver.exe + the install zip
-   pwsh scripts/release.ps1 -Publish -Notes "What changed"   # also cuts the GitHub Release
+   pwsh scripts/release.ps1                                   # dry run: builds the exe + private zip
+   pwsh scripts/release.ps1 -Publish -Notes "What changed"    # publishes ONLY the bare exe
+   pwsh scripts/release.ps1 -DriveFolderId <id>               # also seed the folder id into the zip
    ```
-   The script publishes the self-contained single-file `VSaver.exe` (friends need **nothing**
-   installed) and produces `dist/VSaver-v1.0.1.zip` containing the exe, your real
-   `credentials.json`, and `SETUP.txt`. With `-Publish` it creates the GitHub Release
-   (tag `v1.0.1`) and attaches **both** assets:
-   - **`VSaver.exe`** — the bare exe the auto-updater downloads (it looks for this exact name).
-   - **`VSaver-v1.0.1.zip`** — the first-time-install download for a new friend.
+   The script builds the self-contained single-file `VSaver.exe` and a **private**
+   `dist/VSaver-v1.0.1.zip` (exe + `credentials.json` + `settings.json` + `SETUP.txt`).
+   The two outputs go to very different places:
+   - **`VSaver.exe`** — no secrets; the **only** asset `-Publish` uploads to the GitHub Release
+     (the auto-updater downloads it by this exact name).
+   - **`VSaver-v1.0.1.zip`** — contains the real `credentials.json` and (if you pass
+     `-DriveFolderId`) the shared folder id. **Never uploaded anywhere public** — hand it to
+     friends privately (Discord/email/USB). It stays local in `dist/` (git-ignored).
 
-   > Needs a real `credentials.json` at `src/ValheimSync.App/credentials.json` (Part 1) so it
-   > can be bundled into the zip — the script refuses to package the placeholder. The zip's
-   > exe/credentials are git-ignored; only `dist/SETUP.md` and the script are committed.
+   > 🔒 The script never attaches the zip to a release, and refuses to package a placeholder
+   > `credentials.json`. Put your real `credentials.json` at `src/ValheimSync.App/credentials.json`
+   > (Part 1). Supply the folder id via `-DriveFolderId`, or keep a private (git-ignored)
+   > `src/ValheimSync.App/settings.json` holding it and the script will read it from there.
 
 That's it — the next time anyone opens the app, it upgrades itself to `v1.0.1`.
 
 > The tag drives updates: the app compares its own `<Version>` against the latest release's
 > tag (leading `v` optional). If the tag isn't higher, nothing happens. Never reuse a tag.
 
-> Prefer to do it by hand? Publish the exe manually and attach both `VSaver.exe` and a zip of
-> (`VSaver.exe` + `credentials.json` + `dist/SETUP.md`) to the release. The script just
-> automates exactly that.
+> Doing it by hand? Upload **only** `VSaver.exe` to the release. Never attach the zip,
+> `credentials.json`, or `settings.json` — those are private to your group.
 
 ### First-time distribution (the only manual install)
 
-New users can't auto-update *into* their first copy, and the bare `VSaver.exe` on the release
-has **no** credentials — so send a new friend the **`VSaver-v*.zip`** from the release (built
-above). It contains:
+New users can't auto-update *into* their first copy, and the public release has **only** the
+bare `VSaver.exe` (no credentials, no folder id) — so send a new friend the **private
+`VSaver-v*.zip`** you built above, over a private channel. It contains:
 - `VSaver.exe`
 - `credentials.json` (from Part 1)
+- `settings.json` (with the shared folder id, if you passed `-DriveFolderId`)
 - `SETUP.txt` — a friendly walkthrough (`dist/SETUP.md` in this repo)
 
-They unzip it to a normal folder (keeping the exe and `credentials.json` **together**) and run
-the exe. From then on updates are automatic — and because updates only ship the exe, the
-`credentials.json` already sitting next to it keeps working across every future version.
+They unzip it to a normal folder (keeping the files **together**) and run the exe. If the zip
+didn't carry the folder id, they paste it into the app's **Server folder ID** field once. From
+then on updates are automatic — updates ship only the exe, and the `credentials.json` +
+`settings.json` already sitting next to it keep working across every future version.
 
 ## Part 3.5 — Running in the background
 
@@ -166,7 +174,7 @@ for friends. **It's plain JSON — no comments.** Fields:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `DriveFolderId` | group default | The shared Google Drive folder ID everyone syncs against. Blank → falls back to `DefaultDriveFolderId` baked into the build. |
+| `DriveFolderId` | `""` | The shared Google Drive folder ID everyone syncs against. Blank on a fresh install — the user pastes it in the app's **Server folder ID** field (or you pre-seed it via the private zip). Never hardcoded in source. |
 | `PlayerName` | `""` | Shown on locks; auto-filled from your Google email on first connect. |
 | `WorldsPathOverride` | `null` | Force a specific Valheim worlds folder (else auto-detected). |
 | `PollIntervalMinutes` | `5` | How often to check Drive for remote changes. |

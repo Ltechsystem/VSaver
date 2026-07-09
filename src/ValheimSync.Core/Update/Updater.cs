@@ -42,6 +42,10 @@ public static class Updater
     public static async Task<bool> TryUpdateAsync(Action<string>? log = null,
         Action? beforeRelaunch = null, CancellationToken ct = default)
     {
+        // Mirror every message to both the caller's log and the on-disk update log, so a
+        // failed/absent update is always diagnosable after the fact (see LogPath).
+        void Log(string m) { log?.Invoke(m); LogDiagnostic(m); }
+
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exePath)) return false;
 
@@ -52,22 +56,39 @@ public static class Updater
             return false;
 
         CleanupLeftovers(exePath);
+        Log($"Update check: running v{CurrentVersion}, exe: {exePath}");
 
         try
         {
             var (version, url) = await GetLatestAsync(ct);
-            if (version is null || url is null) return false;
+            if (version is null || url is null)
+            {
+                Log($"No usable release found (repo {Repo}, asset '{AssetName}'). Nothing to update to.");
+                return false;
+            }
             if (version <= CurrentVersion)
             {
-                log?.Invoke($"Up to date (v{CurrentVersion}).");
+                Log($"Up to date (latest release v{version}, running v{CurrentVersion}).");
                 return false;
             }
 
-            log?.Invoke($"Update found: v{CurrentVersion} → v{version}. Downloading...");
+            Log($"Update found: v{CurrentVersion} → v{version}. Downloading {url}");
 
             var newPath = exePath + ".new";
             var oldPath = exePath + ".old";
             await DownloadAsync(url, newPath, ct);
+
+            // Guard against a truncated download or an error page saved as the exe: the real
+            // asset is ~90 MB and every Windows exe begins with the "MZ" signature. Swapping a
+            // bad file in would brick the install, so verify before touching the live exe.
+            var size = new FileInfo(newPath).Length;
+            if (size < 1_000_000 || !StartsWithMzHeader(newPath))
+            {
+                TryDelete(newPath);
+                throw new IOException(
+                    $"Downloaded update is not a valid exe ({size} bytes) — aborting, keeping current version.");
+            }
+            Log($"Downloaded {size:N0} bytes, verified. Swapping in...");
 
             // Swap: move the running exe aside, drop the new one in its place, relaunch.
             TryDelete(oldPath);
@@ -83,16 +104,49 @@ public static class Updater
                 throw;
             }
 
-            log?.Invoke($"Updated to v{version}. Restarting...");
+            Log($"Updated to v{version}. Restarting...");
             beforeRelaunch?.Invoke(); // e.g. release the single-instance lock so the new copy can take it
             Process.Start(new ProcessStartInfo(exePath) { UseShellExecute = true });
             return true;
         }
         catch (Exception ex)
         {
-            log?.Invoke($"Update skipped: {ex.Message}");
+            // Full exception (not just Message) so the log shows why: permissions, network, AV, etc.
+            Log($"Update skipped: {ex}");
             return false;
         }
+    }
+
+    /// <summary>Where the persistent update log lives (always writable, unlike a read-only exe folder).</summary>
+    public static string LogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "ValheimSync", "update.log");
+
+    /// <summary>
+    /// Append a timestamped line to the update log. Best-effort and self-capping — it must
+    /// never throw during startup. Public so the launcher can record why it skipped the check
+    /// (e.g. another instance already running in the tray).
+    /// </summary>
+    public static void LogDiagnostic(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 256 * 1024)
+                File.Delete(LogPath); // simple rotation so it can't grow forever
+            File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {message}{Environment.NewLine}");
+        }
+        catch { /* logging must never break startup */ }
+    }
+
+    private static bool StartsWithMzHeader(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            return fs.ReadByte() == 'M' && fs.ReadByte() == 'Z';
+        }
+        catch { return false; }
     }
 
     private static async Task<(Version? version, string? assetUrl)> GetLatestAsync(CancellationToken ct)

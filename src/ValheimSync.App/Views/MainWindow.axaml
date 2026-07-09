@@ -40,8 +40,9 @@
 
     <Grid RowDefinitions="Auto,Auto,*,Auto,140" Margin="16">
 
-        <!-- Connection bar -->
-        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,0,0,12">
+        <!-- Connection + first-run setup -->
+        <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,12">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
             <TextBlock Grid.Column="0" Text="Your name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
 
             <!-- Display mode: name as plain text with a pen to edit -->
@@ -72,7 +73,7 @@
 
             <Button    Grid.Column="2" Content="Connect"
                        Command="{Binding ConnectCommand}"
-                       IsEnabled="{Binding !IsBusy}"
+                       ToolTip.Tip="Enter your server folder ID below, then connect"
                        IsVisible="{Binding !IsConnected}"/>
             <Button    Grid.Column="3" Content="Log out"
                        Margin="8,0,0,0"
@@ -80,6 +81,15 @@
                        Command="{Binding LogoutCommand}"
                        IsVisible="{Binding IsConnected}"/>
         </Grid>
+
+            <!-- Shared Drive folder id: entered once, hidden after connecting. -->
+            <Grid ColumnDefinitions="Auto,*" IsVisible="{Binding !IsConnected}">
+                <TextBlock Grid.Column="0" Text="Server folder ID:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Grid.Column="1" Text="{Binding DriveFolderId}"
+                         Watermark="Paste the shared Google Drive folder ID your group gave you"
+                         VerticalAlignment="Center"/>
+            </Grid>
+        </StackPanel>
 
         <!-- Toolbar (disabled until a username exists) -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12"

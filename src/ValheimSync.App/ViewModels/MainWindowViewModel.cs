@@ -47,6 +47,19 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>True once a username has been set. Nothing in the app is usable until then.</summary>
     public bool HasName => !string.IsNullOrWhiteSpace(PlayerName);
 
+    /// <summary>
+    /// The shared Google Drive folder id, pasted by the user and persisted to settings.json.
+    /// Required before we can connect — it's never hardcoded in the app (it's private to the
+    /// group), so on a fresh install the user pastes the id their organizer sent them.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFolderId))]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
+    private string _driveFolderId = "";
+
+    /// <summary>True once a shared folder id has been provided — a prerequisite for connecting.</summary>
+    public bool HasFolderId => !string.IsNullOrWhiteSpace(DriveFolderId);
+
     /// <summary>The name being typed while editing (first-time setup or the pen icon).</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SaveNameCommand))]
@@ -68,6 +81,7 @@ public partial class MainWindowViewModel : ObservableObject
     private bool _isConnected;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -84,6 +98,7 @@ public partial class MainWindowViewModel : ObservableObject
     {
         _settings = AppSettings.Load();
         _playerName = _settings.PlayerName;
+        _driveFolderId = _settings.DriveFolderId;
         _nameDraft = _playerName;
         _isEditingName = false;
         RefreshAddableWorlds();
@@ -279,7 +294,7 @@ public partial class MainWindowViewModel : ObservableObject
         UserHoldsAnyLock = Worlds.Any(w => w.IsLockedByMe);
     }
 
-    private bool CanConnect() => !IsConnected;
+    private bool CanConnect() => !IsConnected && !IsBusy && HasFolderId;
 
     [RelayCommand(CanExecute = nameof(CanConnect))]
     private async Task ConnectAsync()
@@ -288,7 +303,11 @@ public partial class MainWindowViewModel : ObservableObject
         StatusText = "Connecting to Google Drive (a browser window may open)...";
         try
         {
-            _cloud = new GoogleDriveStorageProvider(_settings.EffectiveDriveFolderId);
+            // Persist the folder id the user provided, then connect against it.
+            _settings.DriveFolderId = DriveFolderId.Trim();
+            DriveFolderId = _settings.DriveFolderId;
+            _settings.Save();
+            _cloud = new GoogleDriveStorageProvider(_settings.DriveFolderId);
             _engine = new SyncEngine(_settings, _cloud);
             _engine.Log += line => Dispatcher.UIThread.Post(() =>
             {

@@ -40,7 +40,8 @@ Double-click **`VSaver.exe`**.
 ## 3. Connect
 
 1. Type your **name** (used to show who's holding the world).
-2. Paste the shared **Drive folder ID** your group's organizer gave you.
+2. **Server folder ID:** if this box is already filled in, leave it. If it's empty, paste the
+   shared folder ID your group's organizer sent you.
 3. Click **Connect**.
 4. A browser opens for **Google sign-in** (only the first time on this PC). You'll see a
    *"Google hasn't verified this app"* warning — that's normal for a private app. Click
@@ -91,6 +92,13 @@ unverified warning, but stops the weekly re-login).
 finishes; VSaver drops synced worlds into Valheim's own save folder so they appear in the
 in-game list on the next launch.
 
-**The app never seems to update** — Updates apply on launch. Fully quit (tray → Quit) and
-reopen. Updates need the exe's folder to be writable, so don't run it from inside the zip or
-a read-only location — unzip it to a normal folder first.
+**The app never seems to update** — Updates are applied on a **cold launch**, and only when no
+copy is already running. Because VSaver stays in the system tray, re-launching the exe just
+re-opens the tray copy without updating. To force an update: **right-click the tray icon →
+Quit**, then open `VSaver.exe` again. Also make sure the exe is in a **writable** folder (not
+inside the zip or a read-only location).
+
+If it still won't update, check the log at
+`%AppData%\ValheimSync\update.log` (paste `%AppData%\ValheimSync` into the File Explorer
+address bar) — it records the running version, the latest release, and the exact reason an
+update was skipped.

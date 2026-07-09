@@ -28,7 +28,12 @@ internal static class Program
         if (!isPrimary)
         {
             // Another copy is already running (possibly hidden in the tray). Ask it to show
-            // its window, then exit so we never open a duplicate.
+            // its window, then exit so we never open a duplicate. NOTE: this path does NOT
+            // run the update check — a version already in the tray blocks auto-update until
+            // it's fully quit. Record that so "it didn't update" is diagnosable.
+            Updater.LogDiagnostic(
+                "Launch ignored: another VSaver instance is already running (likely in the tray), " +
+                "so the update check was skipped. Fully Quit from the tray icon, then reopen to update.");
             if (EventWaitHandle.TryOpenExisting(ShowEventName, out var ev))
             {
                 try { ev!.Set(); } catch { /* ignore */ }
