@@ -21,7 +21,7 @@ namespace ValheimSync.Core.Storage;
 public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
 {
     private readonly string _folderId;
-    private readonly string _credentialsPath;
+    private readonly string? _credentialsPathOverride;
     private DriveService? _drive;
 
     public string ProviderName => "Google Drive";
@@ -44,26 +44,76 @@ public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
     public GoogleDriveStorageProvider(string folderId, string? credentialsPath = null)
     {
         _folderId = folderId;
-        _credentialsPath = credentialsPath
-            ?? Path.Combine(AppContext.BaseDirectory, "credentials.json");
+        _credentialsPathOverride = credentialsPath;
+    }
+
+    /// <summary>
+    /// Folders to look for credentials.json in, most-authoritative first. In a single-file
+    /// build the exe's own folder is <see cref="Environment.ProcessPath"/>'s directory;
+    /// <see cref="AppContext.BaseDirectory"/> matches it in normal runs, and the process
+    /// working directory is included as a last resort (e.g. launched from a shortcut whose
+    /// "Start in" points at the folder). Deduplicated, preserving order.
+    /// </summary>
+    private static IEnumerable<string> CredentialSearchDirs()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dir in new[]
+                 {
+                     Path.GetDirectoryName(Environment.ProcessPath),
+                     AppContext.BaseDirectory,
+                     Environment.CurrentDirectory,
+                 })
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            var full = Path.GetFullPath(dir);
+            if (seen.Add(full)) yield return full;
+        }
+    }
+
+    /// <summary>
+    /// Locates credentials.json (explicit override wins), or throws a
+    /// <see cref="FileNotFoundException"/> that lists every path checked so the user can
+    /// see exactly where the app looked versus where they put the file.
+    /// </summary>
+    private string ResolveCredentialsPath()
+    {
+        if (!string.IsNullOrWhiteSpace(_credentialsPathOverride))
+        {
+            if (File.Exists(_credentialsPathOverride)) return _credentialsPathOverride;
+            throw new FileNotFoundException(
+                $"credentials.json not found at the configured path:\n  {_credentialsPathOverride}",
+                _credentialsPathOverride);
+        }
+
+        var candidates = CredentialSearchDirs()
+            .Select(d => Path.Combine(d, "credentials.json"))
+            .ToList();
+        var found = candidates.FirstOrDefault(File.Exists);
+        if (found is not null) return found;
+
+        throw new FileNotFoundException(
+            "credentials.json was not found next to the app.\n\n" +
+            "Looked in:\n" + string.Join("\n", candidates.Select(p => "  • " + p)) + "\n\n" +
+            "Checklist:\n" +
+            "  • The file must sit in the SAME folder as the app's .exe.\n" +
+            "  • It must be named exactly \"credentials.json\" — Windows often hides the real\n" +
+            "    extension, so \"credentials.json.txt\" or \"credentials.json.json\" can look right.\n" +
+            "    Turn on File Explorer → View → File name extensions to check.\n" +
+            "  • It's the JSON you download from Google Cloud Console (README Part 1).");
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        if (!File.Exists(_credentialsPath))
-            throw new FileNotFoundException(
-                "credentials.json not found next to the app. You must download it yourself: " +
-                "create a free OAuth 'Desktop app' client in Google Cloud Console, download the JSON, " +
-                "rename it to 'credentials.json', and put it beside the app. See README Part 1.",
-                _credentialsPath);
+        var credentialsPath = ResolveCredentialsPath();
 
-        var credsText = await File.ReadAllTextAsync(_credentialsPath, ct);
+        var credsText = await File.ReadAllTextAsync(credentialsPath, ct);
         if (credsText.Contains("YOUR_CLIENT_ID") || credsText.Contains("YOUR_CLIENT_SECRET"))
             throw new InvalidOperationException(
-                "credentials.json still contains the placeholder values from the example file. " +
-                "Replace it with the real JSON you download from Google Cloud Console (README Part 1).");
+                $"credentials.json ({credentialsPath}) still contains the placeholder values from " +
+                "the example file. Replace it with the real JSON you download from Google Cloud " +
+                "Console (README Part 1).");
 
-        await using var stream = File.OpenRead(_credentialsPath);
+        await using var stream = File.OpenRead(credentialsPath);
 
         var tokenStore = new FileDataStore(TokenStorePath, fullPath: true);
 

@@ -59,6 +59,45 @@ public static class ValheimSaveLocations
         catch { return false; }
     }
 
+    /// <summary>
+    /// Valheim's LocalLow "local storage" worlds folder
+    /// (…\AppData\LocalLow\IronGate\Valheim\worlds_local or …\worlds).
+    ///
+    /// A world only appears in the in-game list once Valheim imports it from here and
+    /// registers it with Steam Cloud (remotecache.vdf). A world written straight into the
+    /// Steam userdata\…\remote folder is NOT registered, so it never shows up in game.
+    /// Copying a download into this folder is what makes it appear — it automates the
+    /// manual "drop the files in LocalLow, then open Valheim" step.
+    ///
+    /// Returns null if Valheim's LocalLow folder can't be found.
+    /// </summary>
+    public static string? ResolveLocalLowWorldsFolder()
+    {
+        var valheim = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "AppData", "LocalLow", "IronGate", "Valheim");
+        if (!Directory.Exists(valheim)) return null;
+
+        // worlds_local is the modern (crossplay) folder; worlds is the legacy one.
+        // Pick whichever Valheim most recently wrote a real world into; if neither has
+        // worlds yet, fall back to the first that exists.
+        var candidates = new[]
+        {
+            Path.Combine(valheim, "worlds_local"),
+            Path.Combine(valheim, "worlds"),
+        };
+
+        string? best = null;
+        var bestTime = DateTime.MinValue;
+        foreach (var folder in candidates)
+        {
+            if (!Directory.Exists(folder)) continue;
+            var newest = NewestFwlUtc(folder);
+            if (best is null || newest > bestTime) { best = folder; bestTime = newest; }
+        }
+        return best ?? candidates.FirstOrDefault(Directory.Exists);
+    }
+
     // ---- Steam discovery ---------------------------------------------------
 
     private static IEnumerable<string> SteamValheimRemoteFolders()

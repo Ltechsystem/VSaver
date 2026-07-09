@@ -22,6 +22,10 @@ publish/
 *.dll
 *.exe
 *.pdb
+# First-time-install zips built by scripts/release.ps1 (the bundled exe + credentials are
+# already ignored above). The setup guide dist/SETUP.md IS tracked.
+dist/*.zip
+dist/.stage/
 
 # ─────────────────────────────────────────────────────────────
 # World save backups the app creates

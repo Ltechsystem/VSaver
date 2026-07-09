@@ -72,7 +72,9 @@ For a **Desktop app** OAuth client, Google itself documents that the "client sec
 2. Right-click → **Share** → add each friend's Google email as **Editor**.
 3. Open the folder and copy the ID from the URL:
    `https://drive.google.com/drive/folders/`**`1aBcD3FgHiJkLmNoP...`** ← that last part is the **folder ID**.
-4. Send the folder ID to everyone (or hardcode it as the default in `AppSettings.cs` before building, so friends never have to paste anything).
+4. Set the folder ID as the group default. Two options:
+   - **Rebuild-free:** put it in each app's `settings.json` under `"DriveFolderId"` (see [Settings](#settingsjson-reference) below) — you can ship a ready-made `settings.json` alongside the exe.
+   - **Baked-in default:** change `DefaultDriveFolderId` in `AppSettings.cs` before building, so a fresh install with no `settings.json` already points at your folder.
 
 > Heads up: because the app uses the restricted `drive.file` scope, the cleanest setup is that the *first* upload of each world happens through the app itself (the app then "owns" those files and everyone's app can see them via the shared folder). Don't manually drag save files into the folder through the Drive website.
 
@@ -101,34 +103,43 @@ public const string Repo = "your-github-name/ValheimSync";
    ```xml
    <Version>1.0.1</Version>
    ```
-2. **Build** the self-contained single-file exe (friends need **nothing** installed):
+2. **Build + package** with the release script (reads the version from the csproj):
    ```powershell
-   dotnet publish src/ValheimSync.App -c Release -r win-x64 --self-contained `
-     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+   pwsh scripts/release.ps1            # dry run: builds VSaver.exe + the install zip
+   pwsh scripts/release.ps1 -Publish -Notes "What changed"   # also cuts the GitHub Release
    ```
-   Output lands in `src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/VSaver.exe`
-   (the project's `AssemblyName` is `VSaver`, so no extra flag is needed).
-3. **Create a GitHub Release** whose **tag matches the version** (`v1.0.1`) and attach the exe
-   as an asset named exactly **`VSaver.exe`** (the updater looks for that name). With the
-   [`gh` CLI](https://cli.github.com):
-   ```powershell
-   gh release create v1.0.1 `
-     "src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/VSaver.exe" `
-     --title "v1.0.1" --notes "What changed"
-   ```
+   The script publishes the self-contained single-file `VSaver.exe` (friends need **nothing**
+   installed) and produces `dist/VSaver-v1.0.1.zip` containing the exe, your real
+   `credentials.json`, and `SETUP.txt`. With `-Publish` it creates the GitHub Release
+   (tag `v1.0.1`) and attaches **both** assets:
+   - **`VSaver.exe`** — the bare exe the auto-updater downloads (it looks for this exact name).
+   - **`VSaver-v1.0.1.zip`** — the first-time-install download for a new friend.
+
+   > Needs a real `credentials.json` at `src/ValheimSync.App/credentials.json` (Part 1) so it
+   > can be bundled into the zip — the script refuses to package the placeholder. The zip's
+   > exe/credentials are git-ignored; only `dist/SETUP.md` and the script are committed.
 
 That's it — the next time anyone opens the app, it upgrades itself to `v1.0.1`.
 
 > The tag drives updates: the app compares its own `<Version>` against the latest release's
 > tag (leading `v` optional). If the tag isn't higher, nothing happens. Never reuse a tag.
 
+> Prefer to do it by hand? Publish the exe manually and attach both `VSaver.exe` and a zip of
+> (`VSaver.exe` + `credentials.json` + `dist/SETUP.md`) to the release. The script just
+> automates exactly that.
+
 ### First-time distribution (the only manual install)
 
-New users can't auto-update *into* their first copy — send them a zip once:
+New users can't auto-update *into* their first copy, and the bare `VSaver.exe` on the release
+has **no** credentials — so send a new friend the **`VSaver-v*.zip`** from the release (built
+above). It contains:
 - `VSaver.exe`
 - `credentials.json` (from Part 1)
+- `SETUP.txt` — a friendly walkthrough (`dist/SETUP.md` in this repo)
 
-Each friend unzips anywhere and runs the exe. From then on updates are automatic.
+They unzip it to a normal folder (keeping the exe and `credentials.json` **together**) and run
+the exe. From then on updates are automatic — and because updates only ship the exe, the
+`credentials.json` already sitting next to it keeps working across every future version.
 
 ## Part 3.5 — Running in the background
 
@@ -146,6 +157,25 @@ intended mode — that's what keeps your world uploading while you play (see bel
 5. Before playing: click **Play** on the world (takes the lock). When you quit Valheim: click **Done** (final upload + lock release).
 
 Settings persist in `settings.json` next to the exe.
+
+### `settings.json` reference
+
+`settings.json` lives next to the exe and is written on first run. You can also create it
+ahead of time (copy `src/ValheimSync.App/settings.json.example`) to preset the shared folder
+for friends. **It's plain JSON — no comments.** Fields:
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `DriveFolderId` | group default | The shared Google Drive folder ID everyone syncs against. Blank → falls back to `DefaultDriveFolderId` baked into the build. |
+| `PlayerName` | `""` | Shown on locks; auto-filled from your Google email on first connect. |
+| `WorldsPathOverride` | `null` | Force a specific Valheim worlds folder (else auto-detected). |
+| `PollIntervalMinutes` | `5` | How often to check Drive for remote changes. |
+| `DebounceSeconds` | `60` | How long a save must be quiet before it's trusted as complete. |
+| `InGameUploadMinutes` | `5` | While Valheim is open, how often to push the in-progress save. |
+| `SelectedWorlds` | `[]` | World names ticked for syncing. |
+
+> Changing the Drive folder mid-stream points the app at a different world set — set it once
+> for the group and leave it. Edits take effect on the next launch.
 
 ---
 

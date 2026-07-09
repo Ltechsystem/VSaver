@@ -18,10 +18,22 @@ public sealed class AppSettings
     public string PlayerName { get; set; } = "";
 
     /// <summary>
-    /// The shared Google Drive folder everyone in the group syncs against.
-    /// Fixed for the whole group — not user-editable and not persisted to settings.json.
+    /// The shared Google Drive folder everyone in the group syncs against. Persisted to
+    /// settings.json so a deployment can point at a different folder without rebuilding;
+    /// when absent it falls back to <see cref="DefaultDriveFolderId"/>.
     /// </summary>
-    public const string DriveFolderId = "1dgMEB7cihhT78u1xdyOQjARhsZukyERb";
+    public string DriveFolderId { get; set; } = DefaultDriveFolderId;
+
+    /// <summary>The group's shared folder, used when settings.json doesn't specify one.</summary>
+    public const string DefaultDriveFolderId = "1dgMEB7cihhT78u1xdyOQjARhsZukyERb";
+
+    /// <summary>
+    /// The folder id to actually connect to: the configured one, or the default if it was
+    /// left blank in settings.json.
+    /// </summary>
+    [JsonIgnore]
+    public string EffectiveDriveFolderId =>
+        string.IsNullOrWhiteSpace(DriveFolderId) ? DefaultDriveFolderId : DriveFolderId.Trim();
 
     /// <summary>Override if Valheim saves live somewhere non-standard.</summary>
     public string? WorldsPathOverride { get; set; }

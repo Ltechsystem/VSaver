@@ -288,7 +288,7 @@ public partial class MainWindowViewModel : ObservableObject
         StatusText = "Connecting to Google Drive (a browser window may open)...";
         try
         {
-            _cloud = new GoogleDriveStorageProvider(AppSettings.DriveFolderId);
+            _cloud = new GoogleDriveStorageProvider(_settings.EffectiveDriveFolderId);
             _engine = new SyncEngine(_settings, _cloud);
             _engine.Log += line => Dispatcher.UIThread.Post(() =>
             {

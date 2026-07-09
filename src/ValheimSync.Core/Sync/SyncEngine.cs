@@ -225,6 +225,10 @@ public sealed class SyncEngine : IAsyncDisposable
             File.Move(tmpDb, dbDest, overwrite: true);
             File.Move(tmpFwl, fwlDest, overwrite: true);
 
+            // Also drop it into Valheim's LocalLow folder so it actually shows up in the
+            // in-game world list (see MirrorToLocalLow). Never fatal to the download.
+            MirrorToLocalLow(worldName, dbDest, fwlDest);
+
             Info($"[{worldName}] Download complete.");
             WorldStatusChanged?.Invoke(worldName, SyncStatus.InSync);
         }
@@ -232,6 +236,48 @@ public sealed class SyncEngine : IAsyncDisposable
         {
             if (File.Exists(tmpDb)) File.Delete(tmpDb);
             if (File.Exists(tmpFwl)) File.Delete(tmpFwl);
+        }
+    }
+
+    /// <summary>
+    /// Copies a freshly downloaded world into Valheim's LocalLow "local storage" folder.
+    /// Valheim only adds a world to the in-game list once it imports it from there and
+    /// registers it with Steam Cloud — a world written solely into the Steam userdata\…\
+    /// remote folder never appears. This automates the manual "copy into LocalLow, then
+    /// open Valheim" step. It is best-effort: any failure is logged, never thrown, so a
+    /// download is still considered complete even if this copy can't happen.
+    /// </summary>
+    private void MirrorToLocalLow(string worldName, string dbSrc, string fwlSrc)
+    {
+        try
+        {
+            var folder = ValheimSaveLocations.ResolveLocalLowWorldsFolder();
+            if (folder is null) return;
+
+            // If the app already syncs straight out of the LocalLow folder, the files are
+            // already there — nothing to mirror.
+            if (string.Equals(
+                    Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar),
+                    Path.GetFullPath(_settings.WorldsPath).TrimEnd(Path.DirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+
+            Directory.CreateDirectory(folder);
+            var dbDest = Path.Combine(folder, $"{worldName}.db");
+            var fwlDest = Path.Combine(folder, $"{worldName}.fwl");
+
+            // Keep one safety copy of anything we replace, same as the main download does.
+            if (File.Exists(dbDest)) File.Copy(dbDest, dbDest + ".synbak", overwrite: true);
+            if (File.Exists(fwlDest)) File.Copy(fwlDest, fwlDest + ".synbak", overwrite: true);
+
+            File.Copy(dbSrc, dbDest, overwrite: true);
+            File.Copy(fwlSrc, fwlDest, overwrite: true);
+
+            Info($"[{worldName}] Copied into Valheim's local folder — it will appear in game.");
+        }
+        catch (Exception ex)
+        {
+            Info($"[{worldName}] Couldn't copy into Valheim's local folder: {ex.Message}");
         }
     }
 
