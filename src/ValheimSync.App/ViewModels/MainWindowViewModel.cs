@@ -16,6 +16,21 @@ public partial class MainWindowViewModel : ObservableObject
     private ICloudStorageProvider? _cloud;
     private readonly HashSet<string> _watchedWorlds = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// When the idle countdown started. Reset to "now" whenever the window is backgrounded
+    /// or Valheim is running, so the 15-minute exit timer measures time spent idle in the
+    /// background after the game has closed.
+    /// </summary>
+    private DateTime _idleSinceUtc = DateTime.UtcNow;
+    private bool _exiting;
+
+    /// <summary>Raised when the app should shut itself down (idle auto-finalize). App wires this to Shutdown.</summary>
+    public event Action? ExitRequested;
+
+    /// <summary>True while the window is hidden (running only in the system tray / background).</summary>
+    [ObservableProperty]
+    private bool _isInBackground;
+
     /// <summary>The main list: worlds ("servers") that exist in the shared cloud folder.</summary>
     public ObservableCollection<WorldItemViewModel> Worlds { get; } = new();
 
@@ -25,7 +40,21 @@ public partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<string> LogLines { get; } = new();
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasName))]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
     private string _playerName;
+
+    /// <summary>True once a username has been set. Nothing in the app is usable until then.</summary>
+    public bool HasName => !string.IsNullOrWhiteSpace(PlayerName);
+
+    /// <summary>The name being typed while editing (first-time setup or the pen icon).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveNameCommand))]
+    private string _nameDraft = "";
+
+    /// <summary>True while the name is shown as an editable text box rather than plain text.</summary>
+    [ObservableProperty]
+    private bool _isEditingName;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AddServerCommand))]
@@ -49,14 +78,111 @@ public partial class MainWindowViewModel : ObservableObject
     public bool ShowPlayButtons => !UserHoldsAnyLock;
 
     [ObservableProperty]
-    private string _statusText = "Not connected. Enter your name and click Connect.";
+    private string _statusText = "Starting up…";
 
     public MainWindowViewModel()
     {
         _settings = AppSettings.Load();
         _playerName = _settings.PlayerName;
+        _nameDraft = _playerName;
+        _isEditingName = false;
         RefreshAddableWorlds();
+
+        if (!HasName)
+            _statusText = "Signing in to Google to get you set up…";
+
+        // Always auto-connect: for first-run users this signs them in and derives their
+        // name from their Google email; for returning users it just resumes syncing.
         _ = AutoConnectAfterDelayAsync();
+
+        // Idle auto-finalize: quit the background app a while after Valheim closes.
+        _ = RunIdleWatchdogAsync();
+    }
+
+    /// <summary>Start the idle countdown the moment the window is hidden to the tray.</summary>
+    partial void OnIsInBackgroundChanged(bool value)
+    {
+        if (value) _idleSinceUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// 15 minutes after the window is backgrounded (with Valheim not running), do a final
+    /// sync and exit cleanly — so the app doesn't linger in the tray forever after play.
+    /// The countdown restarts if Valheim launches or the window is reopened.
+    /// </summary>
+    private async Task RunIdleWatchdogAsync()
+    {
+        var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        while (await timer.WaitForNextTickAsync())
+        {
+            if (_exiting) continue;
+
+            // Countdown only runs while idle in the background: reset it whenever the
+            // window is open or Valheim is running.
+            if (!IsInBackground || ValheimProcess.IsRunning())
+            {
+                _idleSinceUtc = DateTime.UtcNow;
+                continue;
+            }
+
+            if (DateTime.UtcNow - _idleSinceUtc >= TimeSpan.FromMinutes(15))
+            {
+                _exiting = true;
+                await AutoFinalizeAndExitAsync();
+                return;
+            }
+        }
+    }
+
+    /// <summary>Final sync (wait for it to finish), then ask the app to shut down.</summary>
+    private async Task AutoFinalizeAndExitAsync()
+    {
+        try
+        {
+            if (_engine is not null)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    LogLines.Insert(0, "Idle 15 min after Valheim closed — syncing, then exiting."));
+                await _engine.SyncNowAsync(); // wait for the upload/download to complete
+            }
+        }
+        catch { /* best effort — exit regardless */ }
+
+        // Trigger the app's normal shutdown path (releases held locks, disposes engine).
+        await Dispatcher.UIThread.InvokeAsync(() => ExitRequested?.Invoke());
+    }
+
+    private bool CanSaveName() => !string.IsNullOrWhiteSpace(NameDraft);
+
+    /// <summary>Commit a name change from the pen icon. Persisted so it sticks.</summary>
+    [RelayCommand(CanExecute = nameof(CanSaveName))]
+    private void SaveName()
+    {
+        var name = NameDraft.Trim();
+        if (name.Length == 0) return;
+
+        PlayerName = name;
+        _settings.PlayerName = name;
+        _settings.Save();
+        IsEditingName = false;
+        StatusText = $"Name set to {name}.";
+    }
+
+    /// <summary>Show the name text box (pen icon).</summary>
+    [RelayCommand]
+    private void EditName()
+    {
+        NameDraft = PlayerName;
+        IsEditingName = true;
+    }
+
+    /// <summary>Discard an edit and go back to plain text — not allowed during first-time setup.</summary>
+    [RelayCommand]
+    private void CancelNameEdit()
+    {
+        if (!HasName) return;               // can't cancel out of the very first setup
+        NameDraft = PlayerName;
+        IsEditingName = false;
     }
 
     /// <summary>
@@ -162,9 +288,6 @@ public partial class MainWindowViewModel : ObservableObject
         StatusText = "Connecting to Google Drive (a browser window may open)...";
         try
         {
-            _settings.PlayerName = PlayerName.Trim();
-            _settings.Save();
-
             _cloud = new GoogleDriveStorageProvider(AppSettings.DriveFolderId);
             _engine = new SyncEngine(_settings, _cloud);
             _engine.Log += line => Dispatcher.UIThread.Post(() =>
@@ -180,8 +303,30 @@ public partial class MainWindowViewModel : ObservableObject
             });
 
             await _engine.StartAsync();
+
+            // Derive the player's identity from their Google email on first connect
+            // (the local part, before the @). They can override it with the pen icon.
+            if (!HasName)
+            {
+                var derived = DeriveNameFromEmail(await _cloud.GetAccountEmailAsync());
+                if (!string.IsNullOrWhiteSpace(derived))
+                {
+                    PlayerName = derived;
+                    _settings.PlayerName = derived;
+                    _settings.Save();
+                }
+                else
+                {
+                    // Couldn't read the email — fall back to letting them type a name.
+                    IsEditingName = true;
+                }
+            }
+
             IsConnected = true;
             await RefreshServersAsync(); // load the cloud server list + download saves
+
+            if (!HasName)
+                StatusText = "Signed in, but couldn't read your Google email — please enter a name.";
         }
         catch (Exception ex)
         {
@@ -193,6 +338,14 @@ public partial class MainWindowViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>The identity we show/use = the part of the Google email before the @.</summary>
+    private static string? DeriveNameFromEmail(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return null;
+        var at = email.IndexOf('@');
+        return (at > 0 ? email[..at] : email).Trim();
     }
 
     private bool CanUseEngine() => IsConnected;
@@ -314,49 +467,71 @@ public partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        // The lock is ours — switch this row to Done immediately, before we touch Steam,
+        // so it's clear we hold the world no matter how long the game takes to come up.
         item.LockHolder = _settings.PlayerName;
         SetLockedByMe(item, true);       // hides Play everywhere, shows Done on this world
         item.IsSelected = true;          // tick the sync checkbox so this world is kept in sync
 
-        try
+        if (ValheimProcess.IsRunning())
         {
-            if (ValheimProcess.IsRunning())
-            {
-                StatusText = $"Locked '{item.Name}' — Valheim is already running. Syncing automatically.";
-            }
-            else
+            StatusText = $"Locked '{item.Name}' — Valheim is already running. " +
+                         "It'll upload and release automatically when you quit.";
+        }
+        else
+        {
+            try
             {
                 ValheimProcess.Launch();
-                StatusText = $"Locked '{item.Name}', launching Valheim, and syncing automatically.";
+                StatusText = $"Locked '{item.Name}'. Starting Valheim…";
             }
-            StartValheimExitWatcher(item);
+            catch (Exception ex)
+            {
+                StatusText = $"Locked '{item.Name}', but couldn't launch Valheim " +
+                             $"(is Steam installed?): {ex.Message}. Click Done when you're finished.";
+                return; // no game to watch — leave the lock for a manual Done
+            }
         }
-        catch (Exception ex)
-        {
-            StatusText = $"Locked '{item.Name}' (syncing), but couldn't launch Valheim " +
-                         $"(is Steam installed?): {ex.Message}";
-        }
+
+        // Wait for the game to actually appear (Steam can be slow), then auto-release
+        // the lock when it closes. Runs in the background so the UI stays responsive.
+        StartValheimSession(item);
     }
 
     /// <summary>
-    /// After Play, watch for Valheim to close and then auto-release the lock —
-    /// uploading the final save first, exactly like clicking Done.
+    /// After Play: wait until Valheim is actually running (with status feedback), then
+    /// watch for it to close and auto-release the lock — uploading the final save first,
+    /// exactly like clicking Done.
     /// </summary>
-    private void StartValheimExitWatcher(WorldItemViewModel item)
+    private void StartValheimSession(WorldItemViewModel item)
     {
         lock (_watchedWorlds)
         {
             if (!_watchedWorlds.Add(item.Name)) return; // already watching this world
         }
 
-        _ = WatchAsync();
+        _ = RunAsync();
 
-        async Task WatchAsync()
+        async Task RunAsync()
         {
             try
             {
-                var played = await ValheimProcess.WaitForExitAsync(TimeSpan.FromMinutes(5));
-                if (!played) return; // game never started — leave the lock for a manual Done
+                // Poll until the game process comes up. Give Steam a few minutes.
+                var started = await ValheimProcess.WaitForStartAsync(TimeSpan.FromMinutes(3));
+                if (!started)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                        StatusText = $"Valheim didn't start. '{item.Name}' is still locked to you — " +
+                                     "click Done when you're finished, or press Play to try again.");
+                    return; // leave the lock; user can Done manually
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    StatusText = $"Valheim is running — playing '{item.Name}'. " +
+                                 "It'll upload and release automatically when you quit.");
+
+                // Now wait for the game to close, then hand the world back.
+                await ValheimProcess.WaitUntilExitAsync();
                 await Dispatcher.UIThread.InvokeAsync(async () =>
                     await ReleaseWorldAsync(item,
                         $"Valheim closed — uploaded final save and released '{item.Name}'."));
@@ -388,8 +563,36 @@ public partial class MainWindowViewModel : ObservableObject
         StatusText = doneStatus;
     }
 
+    /// <summary>
+    /// Called once when the app is really exiting. Releases any lock this user still
+    /// holds (with a final upload) so closing the app mid-session never leaves the world
+    /// blocked for the group — the Valheim-exit watcher can't do this once the app is gone.
+    /// Must be fully awaited before the process exits, or the Drive calls get cut off.
+    /// </summary>
     public async Task ShutdownAsync()
     {
-        if (_engine is not null) await _engine.DisposeAsync();
+        try
+        {
+            if (_cloud is not null && _engine is not null)
+            {
+                foreach (var world in Worlds.Where(w => w.IsLockedByMe).ToArray())
+                {
+                    try
+                    {
+                        await ReleaseWorldAsync(world,
+                            $"Released the lock on '{world.Name}' while closing.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // Best effort — if this fails the 12 h stale timeout still frees it.
+                        LogLines.Insert(0, $"Could not release '{world.Name}' on exit: {ex.Message}");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (_engine is not null) await _engine.DisposeAsync();
+        }
     }
 }

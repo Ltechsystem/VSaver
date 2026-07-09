@@ -95,6 +95,21 @@ public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
     private DriveService Drive => _drive
         ?? throw new InvalidOperationException("Call InitializeAsync first.");
 
+    public async Task<string?> GetAccountEmailAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var request = Drive.About.Get();
+            request.Fields = "user(emailAddress)";
+            var about = await request.ExecuteAsync(ct);
+            return about.User?.EmailAddress;
+        }
+        catch
+        {
+            return null; // non-fatal — the app just falls back to a manual name
+        }
+    }
+
     public async Task<IReadOnlyList<RemoteFile>> ListFilesAsync(CancellationToken ct = default)
     {
         var results = new List<RemoteFile>();

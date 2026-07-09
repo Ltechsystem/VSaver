@@ -3,7 +3,7 @@
         xmlns:vm="using:ValheimSync.App.ViewModels"
         x:Class="ValheimSync.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="ValheimSync — shared world sync"
+        Title="VSaver — shared world sync"
         Icon="/app.ico"
         Width="760" Height="560"
         MinWidth="600" MinHeight="440">
@@ -43,10 +43,37 @@
         <!-- Connection bar -->
         <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,0,0,12">
             <TextBlock Grid.Column="0" Text="Your name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-            <TextBox   Grid.Column="1" Text="{Binding PlayerName}" Watermark="e.g. Joachim" Margin="0,0,8,0"/>
+
+            <!-- Display mode: name as plain text with a pen to edit -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                        VerticalAlignment="Center" IsVisible="{Binding !IsEditingName}">
+                <TextBlock Text="{Binding PlayerName}" VerticalAlignment="Center"
+                           FontWeight="SemiBold" IsVisible="{Binding HasName}"/>
+                <TextBlock Text="signing in to Google…" VerticalAlignment="Center"
+                           Opacity="0.7" FontStyle="Italic" IsVisible="{Binding !HasName}"/>
+                <Button Content="✎" ToolTip.Tip="Change your name"
+                        Command="{Binding EditNameCommand}" IsVisible="{Binding HasName}"
+                        Background="Transparent" BorderThickness="0" Padding="6,2"/>
+            </StackPanel>
+
+            <!-- Edit mode: text box (first-time fallback or the pen) -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                        VerticalAlignment="Center" IsVisible="{Binding IsEditingName}">
+                <TextBox Width="220" Text="{Binding NameDraft}" Watermark="Your name"
+                         VerticalAlignment="Center">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding SaveNameCommand}"/>
+                    </TextBox.KeyBindings>
+                </TextBox>
+                <Button Content="Save" Command="{Binding SaveNameCommand}"/>
+                <Button Content="Cancel" Command="{Binding CancelNameEditCommand}"
+                        IsVisible="{Binding HasName}"/>
+            </StackPanel>
+
             <Button    Grid.Column="2" Content="Connect"
                        Command="{Binding ConnectCommand}"
-                       IsEnabled="{Binding !IsBusy}"/>
+                       IsEnabled="{Binding !IsBusy}"
+                       IsVisible="{Binding !IsConnected}"/>
             <Button    Grid.Column="3" Content="Log out"
                        Margin="8,0,0,0"
                        ToolTip.Tip="Disconnect and sign in with a different Google account"
@@ -54,9 +81,9 @@
                        IsVisible="{Binding IsConnected}"/>
         </Grid>
 
-        <!-- Toolbar -->
+        <!-- Toolbar (disabled until a username exists) -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12"
-                    VerticalAlignment="Center">
+                    VerticalAlignment="Center" IsEnabled="{Binding HasName}">
             <Button Content="▶ Play Valheim"
                     Classes="accent"
                     Command="{Binding LaunchValheimCommand}"
@@ -77,9 +104,10 @@
                     ToolTip.Tip="Upload the selected local world to the cloud so everyone can play it"/>
         </StackPanel>
 
-        <!-- World list -->
+        <!-- World list (disabled until a username exists) -->
         <Border Grid.Row="2" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="4" Margin="0,0,0,12">
+                BorderThickness="1" CornerRadius="6" Padding="4" Margin="0,0,0,12"
+                IsEnabled="{Binding HasName}">
             <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding Worlds}">
                     <ItemsControl.ItemTemplate>

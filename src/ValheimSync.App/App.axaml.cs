@@ -2,7 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using Avalonia.Platform;
+using Avalonia.Threading;
 using ValheimSync.App.ViewModels;
 using ValheimSync.App.Views;
 
@@ -26,21 +26,51 @@ public class App : Application
 
             SetupTrayIcon(desktop, window);
 
-            desktop.ShutdownRequested += async (_, _) => await vm.ShutdownAsync();
+            // A second launch of the exe signals us instead of opening a duplicate — bring
+            // the window back to the foreground (it may have been hidden in the tray).
+            Program.ShowRequested = () => Dispatcher.UIThread.Post(() => ShowWindow(window));
+
+            // The idle watchdog (Valheim gone 15 min + running only in background) asks
+            // the app to finalize and exit; route that through the normal shutdown path.
+            vm.ExitRequested += () =>
+            {
+                window.AllowRealClose();
+                desktop.Shutdown();
+            };
+
+            // Shutdown cleanup (release held locks, upload final save) is async and does
+            // network I/O. The framework does NOT await event handlers, so we cancel the
+            // first shutdown, run cleanup to completion, then let the real shutdown through.
+            desktop.ShutdownRequested += async (_, e) =>
+            {
+                if (_shutdownCleanupDone) return; // second pass — allow the real exit
+                e.Cancel = true;
+                try { await vm.ShutdownAsync(); }
+                finally
+                {
+                    _shutdownCleanupDone = true;
+                    window.AllowRealClose();
+                    desktop.Shutdown();
+                }
+            };
         }
         base.OnFrameworkInitializationCompleted();
     }
+
+    private bool _shutdownCleanupDone;
 
     private void SetupTrayIcon(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window)
     {
         var trayIcon = new TrayIcon
         {
-            ToolTipText = "ValheimSync — syncing in the background",
-            Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://ValheimSync.App/app.ico"))),
+            ToolTipText = "VSaver — syncing in the background",
+            // Reuse the window's already-loaded icon so this doesn't depend on the
+            // assembly name (avares:// URIs are keyed by assembly, which is now "VSaver").
+            Icon = window.Icon,
             IsVisible = true,
         };
 
-        var open = new NativeMenuItem("Open ValheimSync");
+        var open = new NativeMenuItem("Open VSaver");
         open.Click += (_, _) => ShowWindow(window);
 
         var quit = new NativeMenuItem("Quit");

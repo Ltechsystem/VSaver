@@ -10,7 +10,12 @@ namespace ValheimSync.Core;
 /// </summary>
 public sealed class AppSettings
 {
-    public string PlayerName { get; set; } = Environment.UserName;
+    /// <summary>
+    /// The player's identity, used for world locks. Defaults to empty; on first connect
+    /// it's auto-filled from the signed-in Google account's email (local part, before the @).
+    /// The user can override it with the pen icon in the UI.
+    /// </summary>
+    public string PlayerName { get; set; } = "";
 
     /// <summary>
     /// The shared Google Drive folder everyone in the group syncs against.

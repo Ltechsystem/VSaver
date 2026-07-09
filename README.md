@@ -53,7 +53,7 @@ Drive file access uses **OAuth**, which means a `credentials.json` file instead 
    - Click **Create** → in the dialog click **⬇ Download JSON**. **This downloaded file is your `credentials.json`** — without it the app has nothing to authenticate with.
 6. **Rename** the downloaded file to exactly **`credentials.json`** and place it:
    - **Building from source?** Put it in `src/ValheimSync.App/` (it gets copied next to the exe on build). It replaces the placeholder `credentials.json.example`.
-   - **Running the released exe?** Put it in the **same folder as `ValheimSync.exe`**.
+   - **Running the released exe?** Put it in the **same folder as `VSaver.exe`**.
    - ✅ Sanity check: open the file — it should contain a real `client_id` ending in `.apps.googleusercontent.com`, **not** the `YOUR_CLIENT_ID` placeholder text.
 
 ### Things to know about "Testing" mode
@@ -104,16 +104,16 @@ public const string Repo = "your-github-name/ValheimSync";
 2. **Build** the self-contained single-file exe (friends need **nothing** installed):
    ```powershell
    dotnet publish src/ValheimSync.App -c Release -r win-x64 --self-contained `
-     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-     -p:AssemblyName=ValheimSync
+     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
    ```
-   Output lands in `src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/ValheimSync.exe`.
+   Output lands in `src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/VSaver.exe`
+   (the project's `AssemblyName` is `VSaver`, so no extra flag is needed).
 3. **Create a GitHub Release** whose **tag matches the version** (`v1.0.1`) and attach the exe
-   as an asset named exactly **`ValheimSync.exe`** (the updater looks for that name). With the
+   as an asset named exactly **`VSaver.exe`** (the updater looks for that name). With the
    [`gh` CLI](https://cli.github.com):
    ```powershell
    gh release create v1.0.1 `
-     "src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/ValheimSync.exe" `
+     "src/ValheimSync.App/bin/Release/net8.0/win-x64/publish/VSaver.exe" `
      --title "v1.0.1" --notes "What changed"
    ```
 
@@ -125,7 +125,7 @@ That's it — the next time anyone opens the app, it upgrades itself to `v1.0.1`
 ### First-time distribution (the only manual install)
 
 New users can't auto-update *into* their first copy — send them a zip once:
-- `ValheimSync.exe`
+- `VSaver.exe`
 - `credentials.json` (from Part 1)
 
 Each friend unzips anywhere and runs the exe. From then on updates are automatic.
@@ -139,7 +139,7 @@ intended mode — that's what keeps your world uploading while you play (see bel
 
 ## Part 4 — First run (every user)
 
-1. Run `ValheimSync.App.exe`.
+1. Run `VSaver.exe`.
 2. Enter your name and paste the shared **folder ID** → **Connect**.
 3. A browser opens for Google sign-in (once per machine — the token is cached in `%APPDATA%\ValheimSync\token`). Click through the unverified-app warning.
 4. Tick the world(s) you want to sync.

@@ -13,6 +13,12 @@ public interface ICloudStorageProvider
     /// <summary>Authenticate (interactive on first run) and verify the shared folder.</summary>
     Task InitializeAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// The email address of the signed-in account, or null if unavailable. Used to derive
+    /// the player's identity so they don't have to type a name.
+    /// </summary>
+    Task<string?> GetAccountEmailAsync(CancellationToken ct = default);
+
     /// <summary>List every file in the shared sync folder.</summary>
     Task<IReadOnlyList<RemoteFile>> ListFilesAsync(CancellationToken ct = default);
 

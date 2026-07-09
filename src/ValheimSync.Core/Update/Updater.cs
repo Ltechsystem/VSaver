@@ -23,10 +23,10 @@ public static class Updater
     /// The PUBLIC GitHub repo that hosts the releases, as "owner/name".
     /// ▶ Set this to your repo before you build & distribute.
     /// </summary>
-    public const string Repo = "joachimlow/ValheimSync";
+    public const string Repo = "Ltechsystem/VSaver";
 
     /// <summary>The release asset that contains the app exe (must match your build output name).</summary>
-    private const string AssetName = "ValheimSync.exe";
+    private const string AssetName = "VSaver.exe";
 
     public static Version CurrentVersion => Normalize(
         Assembly.GetEntryAssembly()?.GetName().Version ?? new Version(0, 0, 0));
@@ -39,7 +39,8 @@ public static class Updater
     /// <c>true</c> if an update is being applied and the caller should exit immediately;
     /// <c>false</c> to continue starting the app normally.
     /// </returns>
-    public static async Task<bool> TryUpdateAsync(Action<string>? log = null, CancellationToken ct = default)
+    public static async Task<bool> TryUpdateAsync(Action<string>? log = null,
+        Action? beforeRelaunch = null, CancellationToken ct = default)
     {
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exePath)) return false;
@@ -83,6 +84,7 @@ public static class Updater
             }
 
             log?.Invoke($"Updated to v{version}. Restarting...");
+            beforeRelaunch?.Invoke(); // e.g. release the single-instance lock so the new copy can take it
             Process.Start(new ProcessStartInfo(exePath) { UseShellExecute = true });
             return true;
         }

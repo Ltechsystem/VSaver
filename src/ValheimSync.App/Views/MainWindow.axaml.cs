@@ -1,4 +1,6 @@
+using Avalonia;
 using Avalonia.Controls;
+using ValheimSync.App.ViewModels;
 
 namespace ValheimSync.App.Views;
 
@@ -13,6 +15,14 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Closing += OnClosing;
+
+        // Tell the view model whenever we're hidden (background/tray) vs visible, so its
+        // idle watchdog knows when the app is only running in the background.
+        PropertyChanged += (_, e) =>
+        {
+            if (e.Property == IsVisibleProperty && DataContext is MainWindowViewModel vm)
+                vm.IsInBackground = !(bool)e.NewValue!;
+        };
     }
 
     /// <summary>Called by the tray "Quit" action so the next close actually closes.</summary>
