@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ValheimSync.App.ViewModels"
+        x:Class="ValheimSync.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="ValheimSync — shared world sync"
+        Icon="/app.ico"
+        Width="760" Height="560"
+        MinWidth="600" MinHeight="440">
+
+    <Window.Styles>
+        <!-- Green Play / red Done buttons in the server list (hold color on hover/press). -->
+        <Style Selector="Button.play">
+            <Setter Property="Background" Value="#2E7D32"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style Selector="Button.play:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#388E3C"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style Selector="Button.play:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#1B5E20"/>
+
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+
+        <Style Selector="Button.done">
+            <Setter Property="Background" Value="#C62828"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style Selector="Button.done:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#D32F2F"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style Selector="Button.done:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#B71C1C"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto,140" Margin="16">
+
+        <!-- Connection bar -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,0,0,12">
+            <TextBlock Grid.Column="0" Text="Your name:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBox   Grid.Column="1" Text="{Binding PlayerName}" Watermark="e.g. Joachim" Margin="0,0,8,0"/>
+            <Button    Grid.Column="2" Content="Connect"
+                       Command="{Binding ConnectCommand}"
+                       IsEnabled="{Binding !IsBusy}"/>
+            <Button    Grid.Column="3" Content="Log out"
+                       Margin="8,0,0,0"
+                       ToolTip.Tip="Disconnect and sign in with a different Google account"
+                       Command="{Binding LogoutCommand}"
+                       IsVisible="{Binding IsConnected}"/>
+        </Grid>
+
+        <!-- Toolbar -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12"
+                    VerticalAlignment="Center">
+            <Button Content="▶ Play Valheim"
+                    Classes="accent"
+                    Command="{Binding LaunchValheimCommand}"
+                    ToolTip.Tip="Launch Valheim through Steam"/>
+            <Button Content="Sync now" Command="{Binding SyncNowCommand}"/>
+            <Button Content="Refresh"
+                    Command="{Binding RescanWorldsCommand}"
+                    ToolTip.Tip="Reload the server list from the cloud"/>
+            <Border Width="1" Margin="4,2" Background="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
+            <ComboBox ItemsSource="{Binding AddableWorlds}"
+                      SelectedItem="{Binding SelectedAddableWorld}"
+                      PlaceholderText="local world…"
+                      MinWidth="150"
+                      IsEnabled="{Binding IsConnected}"
+                      ToolTip.Tip="A local world to publish as a shared server"/>
+            <Button Content="Add server"
+                    Command="{Binding AddServerCommand}"
+                    ToolTip.Tip="Upload the selected local world to the cloud so everyone can play it"/>
+        </StackPanel>
+
+        <!-- World list -->
+        <Border Grid.Row="2" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="4" Margin="0,0,0,12">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Worlds}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:WorldItemViewModel">
+                            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto"
+                                  Margin="8,6">
+                                <CheckBox  Grid.Column="0" IsChecked="{Binding IsSelected}"
+                                           ToolTip.Tip="Sync this world" Margin="0,0,12,0"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                           VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0"/>
+                                <TextBlock Grid.Column="2" Text="{Binding SizeDisplay}"
+                                           VerticalAlignment="Center" Opacity="0.7" Margin="0,0,12,0"/>
+                                <TextBlock Grid.Column="3" Text="{Binding StatusDisplay}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock Grid.Column="4" Text="{Binding LockDisplay}"
+                                           VerticalAlignment="Center" Opacity="0.8" Margin="0,0,12,0"/>
+                                <Button    Grid.Column="5" Content="Play" Margin="0,0,12,0"
+                                           Classes="play"
+                                           IsVisible="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ShowPlayButtons}"
+                                           ToolTip.Tip="Take the lock so no one else plays over you"
+                                           Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).AcquireLockCommand}"
+                                           CommandParameter="{Binding}"/>
+                                <Button    Grid.Column="6" Content="Done"
+                                           Classes="done"
+                                           IsVisible="{Binding ShowDone}"
+                                           ToolTip.Tip="Upload final save and hand the world back"
+                                           Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).ReleaseLockCommand}"
+                                           CommandParameter="{Binding}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Status line -->
+        <TextBlock Grid.Row="3" Text="{Binding StatusText}" Opacity="0.85" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+        <!-- Activity log -->
+        <Border Grid.Row="4" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="4">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding LogLines}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <TextBlock Text="{Binding}" FontFamily="Consolas,Menlo,monospace"
+                                       FontSize="12" Margin="4,1"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

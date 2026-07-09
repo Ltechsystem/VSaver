@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────
+# Sensitive — must never be committed (esp. to a public repo)
+# ─────────────────────────────────────────────────────────────
+# Google OAuth "Desktop app" client — distribute in the release zip, not in git.
+credentials.json
+# Per-user settings (player name, path overrides, selected worlds).
+settings.json
+# Cached OAuth token store (normally in %APPDATA%\ValheimSync\token; guard local copies too).
+token/
+*.token
+# Local machine-specific Claude Code settings.
+.claude/settings.local.json
+
+# ─────────────────────────────────────────────────────────────
+# Build output / publish artifacts
+# ─────────────────────────────────────────────────────────────
+bin/
+obj/
+# Published single-file exe lives here alongside copies of credentials/settings — never commit it.
+publish/
+[Pp]ublish/
+*.dll
+*.exe
+*.pdb
+
+# ─────────────────────────────────────────────────────────────
+# World save backups the app creates
+# ─────────────────────────────────────────────────────────────
+*.synbak
+# Temp exe swaps left by the auto-updater.
+*.exe.old
+*.exe.new
+
+# ─────────────────────────────────────────────────────────────
+# IDE / editor
+# ─────────────────────────────────────────────────────────────
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# ─────────────────────────────────────────────────────────────
+# OS cruft
+# ─────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+.DS_Store
