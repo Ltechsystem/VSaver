@@ -18,7 +18,7 @@ Inside you should see:
 ```
 VSaver.exe          ← the app
 credentials.json    ← the key that lets it reach Google Drive
-SETUP.txt           ← this guide
+README.md           ← this guide
 ```
 
 > ⚠️ **`VSaver.exe` and `credentials.json` must stay in the SAME folder.** If you move the

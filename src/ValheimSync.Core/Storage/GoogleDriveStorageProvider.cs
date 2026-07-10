@@ -99,7 +99,7 @@ public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
             "  • It must be named exactly \"credentials.json\" — Windows often hides the real\n" +
             "    extension, so \"credentials.json.txt\" or \"credentials.json.json\" can look right.\n" +
             "    Turn on File Explorer → View → File name extensions to check.\n" +
-            "  • It's the JSON you download from Google Cloud Console (README Part 1).");
+            "  • It ships in the first-time-install zip; see README.md for the full walkthrough.");
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -110,8 +110,8 @@ public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
         if (credsText.Contains("YOUR_CLIENT_ID") || credsText.Contains("YOUR_CLIENT_SECRET"))
             throw new InvalidOperationException(
                 $"credentials.json ({credentialsPath}) still contains the placeholder values from " +
-                "the example file. Replace it with the real JSON you download from Google Cloud " +
-                "Console (README Part 1).");
+                "the example file. Replace it with the real credentials.json for your group — " +
+                "see README.md.");
 
         await using var stream = File.OpenRead(credentialsPath);
 

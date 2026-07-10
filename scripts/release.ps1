@@ -1,30 +1,29 @@
 <#
 .SYNOPSIS
-    Build VSaver and package a first-time-install zip (VSaver.exe + credentials.json + SETUP).
+    Build VSaver and package a first-time-install zip (VSaver.exe + credentials.json + README.md).
 
 .DESCRIPTION
-    Produces two things with very different audiences:
+    Produces two assets, both safe to publish publicly:
 
-      1. dist\VSaver-v<version>.zip  -- the PRIVATE first-time-install bundle
-         (VSaver.exe + credentials.json + settings.json + SETUP.txt). It contains real
-         secrets (the OAuth credentials.json and the shared Drive folder id), so it is for
-         hand-delivery to your group only -- Discord/email/USB. NEVER upload it anywhere
-         public. This script deliberately does NOT attach it to the GitHub Release.
+      1. The bare VSaver.exe -- the auto-updater target. Named exactly VSaver.exe, which the
+         updater looks for.
 
-      2. The bare VSaver.exe -- safe to publish. With -Publish it is the ONLY asset uploaded
-         to the GitHub Release (named exactly VSaver.exe, which the auto-updater looks for).
-         It carries no credentials.json.
+      2. dist\VSaver-v<version>.zip  -- the first-time-install bundle
+         (VSaver.exe + credentials.json + settings.json + README.md). The bundled
+         credentials.json is the PLACEHOLDER template from credentials.json.example (no real
+         secrets) and settings.json ships a blank Drive folder id -- users fill in the real
+         credentials.json and folder id themselves per README.md. Nothing secret is baked in,
+         so both assets attach to the GitHub Release.
 
     The version comes from <Version> in the .csproj; the release tag is v<version>.
 
 .EXAMPLE
     pwsh scripts\release.ps1
-        Build the exe + the private install zip. No GitHub release (dry run).
+        Build the exe + the install zip. No GitHub release (dry run).
 
 .EXAMPLE
     pwsh scripts\release.ps1 -Publish -Notes "Fix credentials.json lookup"
-        Build, then publish ONLY the bare VSaver.exe to the GitHub Release. The install zip
-        stays local in dist\ for you to hand to friends privately.
+        Build, then publish BOTH the bare VSaver.exe and the install zip to the GitHub Release.
 #>
 [CmdletBinding()]
 param(
@@ -32,13 +31,7 @@ param(
     [switch]$Publish,
 
     # Release notes body. Ignored unless -Publish is set.
-    [string]$Notes = "",
-
-    # The shared Drive folder id to bake into the PRIVATE install zip's settings.json.
-    # Never stored in tracked source. If omitted, the script reads DriveFolderId from a
-    # private (gitignored) src\ValheimSync.App\settings.json; if that's missing too, the zip
-    # ships a blank folder id and friends paste it in the app on first run.
-    [string]$DriveFolderId = ""
+    [string]$Notes = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,7 +40,7 @@ $repoRoot   = Split-Path $PSScriptRoot -Parent
 $appProj    = Join-Path $repoRoot "src\ValheimSync.App\ValheimSync.App.csproj"
 $publishDir = Join-Path $repoRoot "src\ValheimSync.App\bin\Release\net8.0\win-x64\publish"
 $distDir    = Join-Path $repoRoot "dist"
-$setupDoc   = Join-Path $repoRoot "dist\SETUP.md"
+$setupDoc   = Join-Path $repoRoot "dist\README.md"
 $settingsSeed = Join-Path $repoRoot "src\ValheimSync.App\settings.json.example"
 
 # --- Read <Version> from the app csproj ------------------------------------------------
@@ -65,16 +58,13 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
 $exe = Join-Path $publishDir "VSaver.exe"
 if (-not (Test-Path $exe)) { throw "Expected build output not found: $exe" }
 
-# --- Locate a real credentials.json to bundle ------------------------------------------
-# The csproj copies src\ValheimSync.App\credentials.json into the publish folder when it
-# exists, so prefer that; fall back to the source copy.
-$creds = Join-Path $publishDir "credentials.json"
-if (-not (Test-Path $creds)) { $creds = Join-Path $repoRoot "src\ValheimSync.App\credentials.json" }
+# --- Locate the placeholder credentials.json to bundle ---------------------------------
+# The zip ships the TEMPLATE credentials.json (the placeholder fields from
+# credentials.json.example) so it carries no real secrets and is safe to publish. Users
+# swap in the real credentials.json for their group per README.md.
+$creds = Join-Path $repoRoot "src\ValheimSync.App\credentials.json.example"
 if (-not (Test-Path $creds)) {
-    throw "credentials.json not found. Put your real one in src\ValheimSync.App\credentials.json (see README Part 1) so it can be bundled into the first-time-install zip."
-}
-if (Select-String -Path $creds -Pattern "YOUR_CLIENT_ID" -SimpleMatch -Quiet) {
-    throw "credentials.json is still the placeholder (contains YOUR_CLIENT_ID). Replace it with the real download from Google Cloud Console before releasing."
+    throw "credentials.json.example not found at $creds - needed to seed the zip's placeholder credentials.json."
 }
 
 # --- Stage + zip -----------------------------------------------------------------------
@@ -84,57 +74,42 @@ if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 New-Item -ItemType Directory -Path $staging | Out-Null
 
 Copy-Item $exe   (Join-Path $staging "VSaver.exe")
+# Ship the PLACEHOLDER credentials.json (from credentials.json.example) so users can see the
+# exact shape of the file; they replace it with their group's real one per README.md.
 Copy-Item $creds (Join-Path $staging "credentials.json")
-# Ship a ready-made settings.json (the shared Drive folder id is already filled in) so a
-# fresh install syncs the right folder without anyone editing anything. The app rewrites
+# Ship a blank-folder-id settings.json. The Drive folder id is entered in the app and stored
+# only in the user's local settings.json -- it is never baked into the build. The app rewrites
 # this file with per-user fields (name, selected worlds) on first run.
 if (Test-Path $settingsSeed) {
-    # Resolve the real folder id from a PRIVATE source only (param, else a gitignored dev
-    # settings.json). It must never come from tracked files.
-    $seedFolderId = $DriveFolderId
-    $privateSettings = Join-Path $repoRoot "src\ValheimSync.App\settings.json"
-    if (-not $seedFolderId -and (Test-Path $privateSettings)) {
-        try { $seedFolderId = (Get-Content $privateSettings -Raw | ConvertFrom-Json).DriveFolderId } catch {}
-    }
-
-    $settings = Get-Content $settingsSeed -Raw | ConvertFrom-Json
-    if ($seedFolderId) {
-        $settings.DriveFolderId = $seedFolderId
-        Write-Host "Seeded the zip's settings.json with the shared Drive folder id." -ForegroundColor Green
-    } else {
-        Write-Warning "No Drive folder id supplied (-DriveFolderId or a private settings.json) - the zip ships a blank folder id; friends paste it in the app on first run."
-    }
-    ($settings | ConvertTo-Json) | Set-Content (Join-Path $staging "settings.json") -Encoding UTF8
+    Copy-Item $settingsSeed (Join-Path $staging "settings.json")
 } else {
     Write-Warning "settings.json.example not found - the zip will omit a seeded settings.json."
 }
 if (Test-Path $setupDoc) {
-    # Ship the setup guide as a .txt so a double-click opens it in Notepad on any PC.
-    Copy-Item $setupDoc (Join-Path $staging "SETUP.txt")
+    Copy-Item $setupDoc (Join-Path $staging "README.md")
 } else {
-    Write-Warning "dist\SETUP.md not found - the zip will omit the setup guide."
+    Write-Warning "dist\README.md not found - the zip will omit the setup guide."
 }
 
 $zip = Join-Path $distDir "VSaver-$tag.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zip
 Remove-Item $staging -Recurse -Force
-Write-Host "Packaged $zip" -ForegroundColor Green
-Write-Host "  ^ PRIVATE: contains real credentials.json + Drive folder id. Hand-deliver only; never upload to a public release." -ForegroundColor Yellow
+Write-Host "Packaged $zip (VSaver.exe + placeholder credentials.json + settings.json + README.md)" -ForegroundColor Green
 
 # --- Optionally cut the GitHub Release -------------------------------------------------
-# SECURITY: only the bare VSaver.exe (no credentials) is ever uploaded. The install zip is
-# deliberately NOT attached here so real secrets can never reach a public release.
+# Both assets are safe to publish: the bare VSaver.exe (auto-updater target) and the
+# first-time-install zip (placeholder credentials.json + blank folder id, no real secrets).
 if ($Publish) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         throw "The GitHub CLI (gh) is not installed or not on PATH - cannot -Publish."
     }
-    Write-Host "Creating GitHub Release $tag (bare VSaver.exe only)..." -ForegroundColor Cyan
-    & gh release create $tag $exe --title $tag --notes $Notes
+    Write-Host "Creating GitHub Release $tag (VSaver.exe + install zip)..." -ForegroundColor Cyan
+    & gh release create $tag $exe $zip --title $tag --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw "gh release create failed." }
-    Write-Host "Released $tag. The install zip was NOT uploaded - share it privately." -ForegroundColor Green
+    Write-Host "Released $tag with both the bare exe and the first-time-install zip." -ForegroundColor Green
 } else {
     Write-Host ""
-    Write-Host "Dry run complete. To publish (uploads ONLY the bare exe), run:" -ForegroundColor Yellow
-    Write-Host "  gh release create $tag `"$exe`" --title `"$tag`" --notes `"...`"" -ForegroundColor Yellow
+    Write-Host "Dry run complete. To publish (uploads the exe + install zip), run:" -ForegroundColor Yellow
+    Write-Host "  gh release create $tag `"$exe`" `"$zip`" --title `"$tag`" --notes `"...`"" -ForegroundColor Yellow
 }

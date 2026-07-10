@@ -108,46 +108,42 @@ public const string Repo = "your-github-name/ValheimSync";
    ```
 2. **Build + package** with the release script (reads the version from the csproj):
    ```powershell
-   pwsh scripts/release.ps1                                   # dry run: builds the exe + private zip
-   pwsh scripts/release.ps1 -Publish -Notes "What changed"    # publishes ONLY the bare exe
-   pwsh scripts/release.ps1 -DriveFolderId <id>               # also seed the folder id into the zip
+   pwsh scripts/release.ps1                                   # dry run: builds the exe + install zip
+   pwsh scripts/release.ps1 -Publish -Notes "What changed"    # publishes the exe + install zip
    ```
-   The script builds the self-contained single-file `VSaver.exe` and a **private**
-   `dist/VSaver-v1.0.1.zip` (exe + `credentials.json` + `settings.json` + `SETUP.txt`).
-   The two outputs go to very different places:
-   - **`VSaver.exe`** — no secrets; the **only** asset `-Publish` uploads to the GitHub Release
-     (the auto-updater downloads it by this exact name).
-   - **`VSaver-v1.0.1.zip`** — contains the real `credentials.json` and (if you pass
-     `-DriveFolderId`) the shared folder id. **Never uploaded anywhere public** — hand it to
-     friends privately (Discord/email/USB). It stays local in `dist/` (git-ignored).
+   The script builds the self-contained single-file `VSaver.exe` and a
+   `dist/VSaver-v1.0.1.zip` (exe + `credentials.json` + `settings.json` + `README.md`).
+   **Both assets are safe to publish** — nothing secret is baked in:
+   - **`VSaver.exe`** — the auto-updater target; downloaded by this exact name.
+   - **`VSaver-v1.0.1.zip`** — the first-time-install bundle. Its `credentials.json` is the
+     **placeholder template** (from `credentials.json.example`) and its `settings.json` ships a
+     **blank** Drive folder id. Users supply the real `credentials.json` and folder id themselves.
 
-   > 🔒 The script never attaches the zip to a release, and refuses to package a placeholder
-   > `credentials.json`. Put your real `credentials.json` at `src/ValheimSync.App/credentials.json`
-   > (Part 1). Supply the folder id via `-DriveFolderId`, or keep a private (git-ignored)
-   > `src/ValheimSync.App/settings.json` holding it and the script will read it from there.
+   With `-Publish`, **both** the bare exe and the zip attach to the GitHub Release.
 
 That's it — the next time anyone opens the app, it upgrades itself to `v1.0.1`.
 
 > The tag drives updates: the app compares its own `<Version>` against the latest release's
 > tag (leading `v` optional). If the tag isn't higher, nothing happens. Never reuse a tag.
 
-> Doing it by hand? Upload **only** `VSaver.exe` to the release. Never attach the zip,
-> `credentials.json`, or `settings.json` — those are private to your group.
+> 🔒 The real `credentials.json` and the shared Drive folder id are **never** part of the
+> build — credentials come from each group's own Google Cloud project, and the folder id is
+> entered in the app and stored only in the user's local `settings.json`.
 
 ### First-time distribution (the only manual install)
 
-New users can't auto-update *into* their first copy, and the public release has **only** the
-bare `VSaver.exe` (no credentials, no folder id) — so send a new friend the **private
-`VSaver-v*.zip`** you built above, over a private channel. It contains:
+New users can't auto-update *into* their first copy, so send a new friend the
+**`VSaver-v*.zip`** — it's attached to every release. It contains:
 - `VSaver.exe`
-- `credentials.json` (from Part 1)
-- `settings.json` (with the shared folder id, if you passed `-DriveFolderId`)
-- `SETUP.txt` — a friendly walkthrough (`dist/SETUP.md` in this repo)
+- `credentials.json` — the **placeholder template** (they replace it with your group's real one)
+- `settings.json` — a blank Drive folder id they fill in via the app's **Server folder ID** field
+- `README.md` — a friendly walkthrough (`dist/README.md` in this repo)
 
-They unzip it to a normal folder (keeping the files **together**) and run the exe. If the zip
-didn't carry the folder id, they paste it into the app's **Server folder ID** field once. From
-then on updates are automatic — updates ship only the exe, and the `credentials.json` +
-`settings.json` already sitting next to it keep working across every future version.
+They unzip it to a normal folder (keeping the files **together**), drop in the real
+`credentials.json` you send them, run the exe, and paste the shared folder id into the app's
+**Server folder ID** field once. From then on updates are automatic — updates ship only the
+exe, and the `credentials.json` + `settings.json` already sitting next to it keep working
+across every future version.
 
 ## Part 3.5 — Running in the background
 
