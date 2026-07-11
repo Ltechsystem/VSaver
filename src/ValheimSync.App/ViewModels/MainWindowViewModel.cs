@@ -304,6 +304,10 @@ public partial class MainWindowViewModel : ObservableObject
         var value = (input ?? "").Trim();
         if (value.Length == 0) return "";
 
+        // "…/open?id=<id>"-style links carry the id in the query string instead of the path.
+        var byQuery = System.Text.RegularExpressions.Regex.Match(value, @"[?&]id=([^&#/?]+)");
+        if (byQuery.Success) return byQuery.Groups[1].Value.Trim();
+
         // If it's a URL, pull the segment after ".../folders/" (or "/d/" for file links).
         foreach (var marker in new[] { "/folders/", "/d/" })
         {
@@ -478,15 +482,24 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>Launch the game via Steam. Independent of the sync connection.</summary>
+    /// <summary>Launch the game via Steam, pulling the latest shared save down first.</summary>
     [RelayCommand]
-    private void LaunchValheim()
+    private async Task LaunchValheimAsync()
     {
         if (ValheimProcess.IsRunning())
         {
             StatusText = "Valheim is already running.";
             return;
         }
+
+        // Always sync with Drive and wait for it to finish before opening the game,
+        // so we never start on a stale local save.
+        if (!await SyncBeforeLaunchAsync())
+        {
+            StatusText += "  Fix the connection and press Play again — the game wasn't launched.";
+            return;
+        }
+
         try
         {
             ValheimProcess.Launch();
@@ -499,6 +512,35 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Runs a full sync against Drive and waits for it to complete, so the game always
+    /// opens on the latest shared save. Returns true when it's safe to launch — either the
+    /// sync succeeded or there's nothing connected to sync against; false only when a sync
+    /// was attempted and failed, in which case the launch should be held back.
+    /// </summary>
+    private async Task<bool> SyncBeforeLaunchAsync()
+    {
+        if (_engine is null || !IsConnected)
+            return true; // not connected — nothing to sync, let the launch proceed
+
+        IsBusy = true;
+        StatusText = "Syncing with Drive before launching…";
+        try
+        {
+            await _engine.SyncNowAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Sync before launch failed: {ex.Message}";
+            return false;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
     /// "I want to play this world now" — take the cloud lock, make sure the
     /// world is ticked for syncing, and launch Valheim.
     /// </summary>
@@ -506,6 +548,17 @@ public partial class MainWindowViewModel : ObservableObject
     private async Task AcquireLockAsync(WorldItemViewModel? item)
     {
         if (item is null || _cloud is null) return;
+
+        // Tick this world for syncing, then pull the latest shared save down and wait
+        // for it to finish — before taking the lock, so the engine downloads the newest
+        // version rather than uploading a stale local copy once the lock is ours.
+        item.IsSelected = true;
+        if (!await SyncBeforeLaunchAsync())
+        {
+            StatusText += "  Fix the connection and press Play again.";
+            return;
+        }
+
         var got = await _cloud.TryAcquireLockAsync(item.Name, _settings.PlayerName);
         if (!got)
         {
@@ -520,7 +573,6 @@ public partial class MainWindowViewModel : ObservableObject
         // so it's clear we hold the world no matter how long the game takes to come up.
         item.LockHolder = _settings.PlayerName;
         SetLockedByMe(item, true);       // hides Play everywhere, shows Done on this world
-        item.IsSelected = true;          // tick the sync checkbox so this world is kept in sync
 
         if (ValheimProcess.IsRunning())
         {

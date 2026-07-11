@@ -30,6 +30,15 @@ public interface ICloudStorageProvider
     Task DownloadAsync(string remoteName, string localPath,
         IProgress<double>? progress = null, CancellationToken ct = default);
 
+    /// <summary>
+    /// Server-side copy of <paramref name="sourceRemoteName"/> to
+    /// <paramref name="destRemoteName"/>, overwriting any existing destination so exactly
+    /// one copy is kept. Returns false (and does nothing) when the source doesn't exist.
+    /// Used to roll a world's current remote save into a single backup before a new
+    /// upload overwrites it.
+    /// </summary>
+    Task<bool> CopyAsync(string sourceRemoteName, string destRemoteName, CancellationToken ct = default);
+
     Task DeleteAsync(string remoteName, CancellationToken ct = default);
 
     // ---- World locking -------------------------------------------------

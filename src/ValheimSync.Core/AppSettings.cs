@@ -63,7 +63,16 @@ public sealed class AppSettings
         try
         {
             if (File.Exists(SettingsPath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new();
+            {
+                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+                if (s is not null)
+                {
+                    // Deserialization replaces the set and silently drops the OrdinalIgnoreCase
+                    // comparer — rewrap so world-name lookups stay case-insensitive after a reload.
+                    s.SelectedWorlds = new HashSet<string>(s.SelectedWorlds, StringComparer.OrdinalIgnoreCase);
+                    return s;
+                }
+            }
         }
         catch { /* corrupt settings — start fresh rather than crash */ }
         return new AppSettings();

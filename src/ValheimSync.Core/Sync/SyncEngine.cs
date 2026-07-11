@@ -27,14 +27,25 @@ public sealed class SyncEngine : IAsyncDisposable
     private PeriodicTimer? _inGameTimer;
     private CancellationTokenSource? _cts;
 
+    // Backup-once-per-session bookkeeping. A "session" is one run of Valheim; the state
+    // records which worlds were already backed up this session and is cleared when a new
+    // session starts. Persisted to disk so an app restart mid-session doesn't re-backup
+    // and overwrite the pre-session snapshot with mid-session state. All access is
+    // serialized under _syncGate.
+    private readonly BackupSessionState _session;
+    private readonly string _sessionStatePath;
+
     public event Action<string, SyncStatus>? WorldStatusChanged;
     public event Action<string>? Log;
 
-    public SyncEngine(AppSettings settings, ICloudStorageProvider cloud, ILogger? log = null)
+    public SyncEngine(AppSettings settings, ICloudStorageProvider cloud, ILogger? log = null,
+        string? sessionStatePath = null)
     {
         _settings = settings;
         _cloud = cloud;
         _log = log ?? NullLogger.Instance;
+        _sessionStatePath = sessionStatePath ?? BackupSessionState.DefaultPath;
+        _session = BackupSessionState.Load(_sessionStatePath);
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -91,6 +102,7 @@ public sealed class SyncEngine : IAsyncDisposable
         await _syncGate.WaitAsync(ct);
         try
         {
+            UpdateSessionState();
             await SyncWorldAsync(worldName, ct, allowUploadWhileRunning);
         }
         catch (Exception ex)
@@ -123,6 +135,13 @@ public sealed class SyncEngine : IAsyncDisposable
         // ---- Case 1: nothing local, remote exists → first-time download ----
         if (local is null && remoteDb is not null && remoteFwl is not null)
         {
+            if (CommitState(remote, worldName, remoteDb, remoteFwl) == false)
+            {
+                Info($"[{worldName}] Remote save looks torn (an upload was interrupted) — " +
+                     "waiting for the next complete upload before downloading.");
+                WorldStatusChanged?.Invoke(worldName, SyncStatus.Error);
+                return;
+            }
             await DownloadWorldAsync(worldName, ct);
             return;
         }
@@ -139,6 +158,14 @@ public sealed class SyncEngine : IAsyncDisposable
 
         if (dbMatches)
         {
+            // A matching .db is also our chance to repair a torn or unannotated remote
+            // (missing .fwl, or a missing/stale commit marker) — but never over someone
+            // else's active session.
+            if (!otherHoldsLock)
+            {
+                try { await RepairRemotePairAsync(local, localDbHash, remote, remoteDb!, remoteFwl, ct); }
+                catch (Exception ex) { Info($"[{worldName}] Couldn't repair remote pair: {ex.Message}"); }
+            }
             WorldStatusChanged?.Invoke(worldName,
                 otherHoldsLock ? SyncStatus.LockedByOther : SyncStatus.InSync);
             return;
@@ -166,7 +193,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 Info($"[{worldName}] Valheim running — pushing in-progress save.");
             }
-            await UploadWorldAsync(local, ct);
+            await UploadWorldAsync(local, localDbHash, ct);
         }
         else
         {
@@ -176,22 +203,141 @@ public sealed class SyncEngine : IAsyncDisposable
                 WorldStatusChanged?.Invoke(worldName, SyncStatus.RemoteNewer);
                 return;
             }
+            // remoteDb is non-null on this branch; the pair must be complete and untorn.
+            if (remoteFwl is null || CommitState(remote, worldName, remoteDb!, remoteFwl) == false)
+            {
+                Info($"[{worldName}] Remote save is incomplete or torn — skipping download " +
+                     "until it's re-uploaded.");
+                WorldStatusChanged?.Invoke(worldName, SyncStatus.Error);
+                return;
+            }
             await DownloadWorldAsync(worldName, ct);
         }
     }
 
-    private async Task UploadWorldAsync(WorldSave world, CancellationToken ct)
+    private async Task UploadWorldAsync(WorldSave world, string dbMd5, CancellationToken ct)
     {
         WorldStatusChanged?.Invoke(world.Name, SyncStatus.Syncing);
+
+        // Snapshot once per play session: the first upload of a session rolls the
+        // pre-session remote save into a single backup per world (<world>.db.bak /
+        // <world>.fwl.bak). Later uploads in the same session — in-game auto-saves and
+        // the final save on exit — leave that backup untouched, so it always holds the
+        // state from before the session began. The set is persisted so an app restart
+        // mid-session can't retrigger it.
+        if (_session.BackedUpWorlds.Add(world.Name))
+        {
+            await BackupRemoteAsync(world, ct);
+            _session.Save(_sessionStatePath);
+        }
+
         Info($"[{world.Name}] Uploading ({world.SizeBytes / (1024.0 * 1024):F1} MB)...");
 
-        // .db first, .fwl last — the .fwl acts as the commit marker, so a
-        // half-finished upload never looks like a complete world remotely.
+        // Upload order is the crash-safety story: .db, then .fwl, then the commit marker
+        // LAST. Only a marker whose content matches the pair's MD5s certifies the pair as
+        // uploaded-together, so an interrupt anywhere before the marker leaves the remote
+        // detectably torn instead of silently downloadable.
         await _cloud.UploadAsync(world.DbPath, world.DbFileName, null, ct);
         await _cloud.UploadAsync(world.FwlPath, world.FwlFileName, null, ct);
+        var fwlMd5 = await Hashing.Md5Async(world.FwlPath, ct);
+        await UploadCommitMarkerAsync(world.Name, dbMd5, fwlMd5, ct);
 
         Info($"[{world.Name}] Upload complete.");
         WorldStatusChanged?.Invoke(world.Name, SyncStatus.InSync);
+    }
+
+    /// <summary>
+    /// Detects the start of a new play session (Valheim transitioning from not-running to
+    /// running) and clears the per-session backup set so the next upload snapshots again.
+    /// Resetting on session <em>start</em> — not exit — keeps the final save-on-exit upload
+    /// (which happens after Valheim has already closed) from re-triggering a backup.
+    /// </summary>
+    private void UpdateSessionState()
+    {
+        bool running = ValheimProcess.IsRunning();
+        if (running == _session.ValheimWasRunning) return;
+
+        if (running) _session.BackedUpWorlds.Clear();
+        _session.ValheimWasRunning = running;
+        _session.Save(_sessionStatePath);
+    }
+
+    /// <summary>
+    /// Copies the world's current remote .db/.fwl into a single rolling backup
+    /// (<c>.db.bak</c>/<c>.fwl.bak</c>) before they are overwritten. Best-effort: a
+    /// failed backup is logged but never blocks the upload that follows.
+    /// </summary>
+    private async Task BackupRemoteAsync(WorldSave world, CancellationToken ct)
+    {
+        try
+        {
+            var dbBacked = await _cloud.CopyAsync(world.DbFileName, world.DbFileName + ".bak", ct);
+            var fwlBacked = await _cloud.CopyAsync(world.FwlFileName, world.FwlFileName + ".bak", ct);
+            // Keep the marker with its pair so a manual restore of the .bak files can be
+            // checked for consistency too.
+            await _cloud.CopyAsync(CommitMarker.Name(world.Name), CommitMarker.Name(world.Name) + ".bak", ct);
+            if (dbBacked || fwlBacked)
+                Info($"[{world.Name}] Backed up previous remote save.");
+        }
+        catch (Exception ex)
+        {
+            Info($"[{world.Name}] Couldn't back up previous remote save: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Consistency of the remote .db/.fwl pair against its commit marker, judged purely
+    /// from the folder listing — the marker's canonical content makes its MD5 predictable
+    /// from the pair's MD5s, so no download is needed.
+    /// true = marker certifies the pair; false = torn (an upload was interrupted);
+    /// null = no marker or hashes unavailable (legacy remote — trusted as before).
+    /// </summary>
+    private static bool? CommitState(IReadOnlyList<RemoteFile> remote, string worldName,
+        RemoteFile remoteDb, RemoteFile remoteFwl)
+    {
+        var commit = remote.FirstOrDefault(f =>
+            f.Name.Equals(CommitMarker.Name(worldName), StringComparison.OrdinalIgnoreCase));
+        if (commit?.Md5Checksum is null || remoteDb.Md5Checksum is null || remoteFwl.Md5Checksum is null)
+            return null;
+        var expected = Hashing.Md5Text(CommitMarker.Content(remoteDb.Md5Checksum, remoteFwl.Md5Checksum));
+        return string.Equals(commit.Md5Checksum, expected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task UploadCommitMarkerAsync(string worldName, string dbMd5, string fwlMd5,
+        CancellationToken ct)
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"vs-{Guid.NewGuid():N}.commit");
+        await File.WriteAllTextAsync(tmp, CommitMarker.Content(dbMd5, fwlMd5), ct);
+        try { await _cloud.UploadAsync(tmp, CommitMarker.Name(worldName), null, ct); }
+        finally { File.Delete(tmp); }
+    }
+
+    /// <summary>
+    /// Runs when local and remote .db already match: completes a torn remote (its .fwl
+    /// never made it up) from our identical local copy, and writes/refreshes the commit
+    /// marker when it's missing (legacy remote) or stale (a marker upload failed after
+    /// the pair went up). Safe for any client — it only describes or completes content
+    /// that already matches what it has locally.
+    /// </summary>
+    private async Task RepairRemotePairAsync(WorldSave local, string localDbHash,
+        IReadOnlyList<RemoteFile> remote, RemoteFile remoteDb, RemoteFile? remoteFwl,
+        CancellationToken ct)
+    {
+        if (remoteFwl is null)
+        {
+            Info($"[{local.Name}] Remote .fwl is missing — completing the pair from the local copy.");
+            await _cloud.UploadAsync(local.FwlPath, local.FwlFileName, null, ct);
+            var uploadedFwlMd5 = await Hashing.Md5Async(local.FwlPath, ct);
+            await UploadCommitMarkerAsync(local.Name, remoteDb.Md5Checksum ?? localDbHash, uploadedFwlMd5, ct);
+            return;
+        }
+
+        if (remoteDb.Md5Checksum is null || remoteFwl.Md5Checksum is null) return;
+        if (CommitState(remote, local.Name, remoteDb, remoteFwl) == true) return;
+
+        // Marker absent or doesn't describe the pair that's actually up there — rewrite it.
+        await UploadCommitMarkerAsync(local.Name, remoteDb.Md5Checksum, remoteFwl.Md5Checksum, ct);
+        Info($"[{local.Name}] Wrote commit marker for the remote save.");
     }
 
     private async Task DownloadWorldAsync(string worldName, CancellationToken ct)
@@ -208,12 +354,16 @@ public sealed class SyncEngine : IAsyncDisposable
             await _cloud.DownloadAsync($"{worldName}.db", tmpDb, null, ct);
             await _cloud.DownloadAsync($"{worldName}.fwl", tmpFwl, null, ct);
 
-            // Verify the .db against the remote hash before touching the live folder.
+            // Verify both halves against the remote hashes before touching the live folder.
             var remote = await _cloud.ListFilesAsync(ct);
             var remoteDb = remote.First(f => f.Name.Equals($"{worldName}.db", StringComparison.OrdinalIgnoreCase));
             if (remoteDb.Md5Checksum is not null &&
                 remoteDb.Md5Checksum != await Hashing.Md5Async(tmpDb, ct))
                 throw new IOException("Downloaded .db failed hash verification — aborting.");
+            var remoteFwl = remote.First(f => f.Name.Equals($"{worldName}.fwl", StringComparison.OrdinalIgnoreCase));
+            if (remoteFwl.Md5Checksum is not null &&
+                remoteFwl.Md5Checksum != await Hashing.Md5Async(tmpFwl, ct))
+                throw new IOException("Downloaded .fwl failed hash verification — aborting.");
 
             var dbDest = Path.Combine(_settings.WorldsPath, $"{worldName}.db");
             var fwlDest = Path.Combine(_settings.WorldsPath, $"{worldName}.fwl");

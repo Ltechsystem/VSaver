@@ -237,6 +237,30 @@ public sealed class GoogleDriveStorageProvider : ICloudStorageProvider
             throw new IOException($"Download of '{remoteName}' failed.", result.Exception);
     }
 
+    public async Task<bool> CopyAsync(string sourceRemoteName, string destRemoteName,
+        CancellationToken ct = default)
+    {
+        var source = await FindByNameAsync(sourceRemoteName, ct);
+        if (source is null) return false; // nothing to back up yet
+
+        // Drive has no "overwrite by name", so drop any prior backup first to keep
+        // exactly one copy per name.
+        var existingDest = await FindByNameAsync(destRemoteName, ct);
+        if (existingDest is not null)
+        {
+            var del = Drive.Files.Delete(existingDest.Id);
+            del.SupportsAllDrives = true;
+            await del.ExecuteAsync(ct);
+        }
+
+        var meta = new DriveFile { Name = destRemoteName, Parents = new[] { _folderId } };
+        var copy = Drive.Files.Copy(meta, source.Id);
+        copy.Fields = "id";
+        copy.SupportsAllDrives = true;
+        await copy.ExecuteAsync(ct);
+        return true;
+    }
+
     public async Task DeleteAsync(string remoteName, CancellationToken ct = default)
     {
         var remote = await FindByNameAsync(remoteName, ct);

@@ -36,6 +36,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Let the test project reach internal helpers (e.g. NormalizeFolderId). -->
+    <InternalsVisibleTo Include="ValheimSync.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ship credentials.json next to the exe if present -->
     <None Update="credentials.json" Condition="Exists('credentials.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
