@@ -294,6 +294,34 @@ public partial class MainWindowViewModel : ObservableObject
         UserHoldsAnyLock = Worlds.Any(w => w.IsLockedByMe);
     }
 
+    /// <summary>
+    /// Extracts a bare Google Drive folder id from whatever the user pasted.
+    /// Handles a plain id as well as full share links such as
+    /// "https://drive.google.com/drive/folders/&lt;id&gt;?hl=da".
+    /// </summary>
+    internal static string NormalizeFolderId(string input)
+    {
+        var value = (input ?? "").Trim();
+        if (value.Length == 0) return "";
+
+        // If it's a URL, pull the segment after ".../folders/" (or "/d/" for file links).
+        foreach (var marker in new[] { "/folders/", "/d/" })
+        {
+            var idx = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                value = value.Substring(idx + marker.Length);
+                break;
+            }
+        }
+
+        // Drop any trailing path, query string, or fragment (?hl=da, /view, #...).
+        var end = value.IndexOfAny(new[] { '/', '?', '#' });
+        if (end >= 0) value = value.Substring(0, end);
+
+        return value.Trim();
+    }
+
     private bool CanConnect() => !IsConnected && !IsBusy && HasFolderId;
 
     [RelayCommand(CanExecute = nameof(CanConnect))]
@@ -304,7 +332,9 @@ public partial class MainWindowViewModel : ObservableObject
         try
         {
             // Persist the folder id the user provided, then connect against it.
-            _settings.DriveFolderId = DriveFolderId.Trim();
+            // Accepts either a bare id or a full Drive URL, e.g.
+            // https://drive.google.com/drive/folders/<id>?hl=da
+            _settings.DriveFolderId = NormalizeFolderId(DriveFolderId);
             DriveFolderId = _settings.DriveFolderId;
             _settings.Save();
             _cloud = new GoogleDriveStorageProvider(_settings.DriveFolderId);
